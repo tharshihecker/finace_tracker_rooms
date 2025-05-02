@@ -1,4 +1,6 @@
 package com.example.app.activities
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 import android.annotation.SuppressLint
 import android.content.Intent
@@ -6,8 +8,10 @@ import android.os.Bundle
 import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import com.example.app.R
-import com.example.app.utils.SharedPrefsHelper
+import com.example.app.database.AppDatabase
+import kotlinx.coroutines.launch
 
 class MainActivity : AppCompatActivity() {
 
@@ -53,45 +57,60 @@ class MainActivity : AppCompatActivity() {
     override fun onResume() {
         super.onResume()
 
-        val income = SharedPrefsHelper.getIncome(this)
-        val expense = SharedPrefsHelper.getExpenses(this)
-        val budget = SharedPrefsHelper.getBudget(this)
-        val net = income - expense
-        val diff = budget - expense
+        lifecycleScope.launch {
+            val db = AppDatabase.getInstance(applicationContext)
+            val transactionDao = db.transactionDao()
+            val settingsDao    = db.settingsDao()
 
-        val currency = SharedPrefsHelper.getCurrency(this)
+            // 1. Fetch and sum transactions
+            val allTxns = transactionDao.getAllTransactions()
+            val income  = allTxns.filter { it.category.equals("Income", true) }
+                .sumOf { it.amount }
+            val expense = allTxns.filter { !it.category.equals("Income", true) }
+                .sumOf { it.amount }
 
-        // --- Format budget status ---
-        val statusText: String
-        val statusColor: Int
-        if (diff >= 0) {
-            statusText = "\uD83C\uDF89 On Track!\nSaved $currency$diff this month"
-            statusColor = getColor(R.color.sucessColor)
-        } else {
-            statusText = "\uD83D\uDEA8 Budget Exceeded!\nOverspent by $currency${-diff}"
-            statusColor = getColor(R.color.warningColor)
+            // 2. Fetch budget + currency from Settings
+            val settings = settingsDao.getSettings()
+            val budget   = settings?.budget ?: 0.0
+            val currency = settings?.currencySymbol ?: "₨"
+
+            // 3. Compute net and diff
+            val net  = income - expense
+            val diff = budget - expense
+
+            // 4. Update UI on main thread
+            withContext(Dispatchers.Main) {
+                // Budget status
+                val statusText: String
+                val statusColor: Int
+                if (diff >= 0) {
+                    statusText  = "\uD83C\uDF89 On Track!\nSaved $currency${"%.2f".format(diff)} this month"
+                    statusColor = getColor(R.color.sucessColor)
+                } else {
+                    statusText  = "\uD83D\uDEA8 Budget Exceeded!\nOverspent by $currency${"%.2f".format(-diff)}"
+                    statusColor = getColor(R.color.warningColor)
+                }
+                tvBudgetStatus.text          = statusText
+                tvBudgetStatus.setTextColor(statusColor)
+
+                // Net Balance
+                val netText = if (net >= 0) {
+                    "\uD83D\uDCB0 Balance Left: $currency${"%.2f".format(net)}"
+                } else {
+                    "\uD83D\uDCB8 Overused: $currency${"%.2f".format(-net)}"
+                }
+                tvNetBalance.text         = netText
+                tvNetBalance.setTextColor(
+                    if (net >= 0) getColor(R.color.sucessColor)
+                    else getColor(R.color.warningColor)
+                )
+
+                // Totals
+                tvTotalIncome.text   = "\uD83D\uDCB0 Income: $currency${"%.2f".format(income)}"
+                tvTotalExpenses.text = "\uD83D\uDCB8 Spent: $currency${"%.2f".format(expense)}"
+                tvBudget.text        = "\uD83D\uDCC5 Budget: $currency${"%.2f".format(budget)}"
+            }
         }
-
-        tvBudgetStatus.text = statusText
-        tvBudgetStatus.setTextColor(statusColor)
-
-        // --- Set Net Balance ---
-        val netText = if (net >= 0) {
-            "\uD83D\uDCB0 Balance Left: $currency$net"
-        } else {
-            "\uD83D\uDCB8 Overused: $currency${-net}"
-        }
-
-        tvNetBalance.text = netText
-        tvNetBalance.setTextColor(
-            if (net >= 0) getColor(R.color.sucessColor)
-            else getColor(R.color.warningColor)
-        )
-
-        // --- Set other views with icons ---
-        tvTotalIncome.text = "\uD83D\uDCB0 Income: $currency$income"
-        tvTotalExpenses.text = "\uD83D\uDCB8 Spent: $currency$expense"
-        tvBudget.text = "\uD83D\uDCC5 Budget: $currency$budget"
     }
 
 }

@@ -1,12 +1,21 @@
 package com.example.app.activities
 
+import android.app.NotificationChannel
+import android.app.NotificationManager
+import android.content.Intent
+import android.os.Build
 import android.os.Bundle
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
+import androidx.core.app.NotificationCompat
+import androidx.lifecycle.lifecycleScope
 import com.example.app.R
-import com.example.app.utils.NotificationHelper
-import com.example.app.utils.SharedPrefsHelper
-import android.content.Intent
+import com.example.app.database.AppDatabase
+import com.example.app.models.Settings
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import java.text.DecimalFormat
 
 class BudgetSetupActivity : AppCompatActivity() {
 
@@ -17,6 +26,9 @@ class BudgetSetupActivity : AppCompatActivity() {
     private lateinit var spinnerCurrency: Spinner
 
     private val currencySymbols = arrayOf("₨", "₹", "$")
+    private val db by lazy { AppDatabase.getInstance(this) }
+    private val settingsDao by lazy { db.settingsDao() }
+    private val transactionDao by lazy { db.transactionDao() }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -28,99 +40,150 @@ class BudgetSetupActivity : AppCompatActivity() {
         btnBack = findViewById(R.id.btnBack)
         spinnerCurrency = findViewById(R.id.spinnerCurrency)
 
-        // Setup spinner with currency symbols
-        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, currencySymbols)
-        adapter.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
-        spinnerCurrency.adapter = adapter
-
-        // Load saved currency and set spinner selection
-        val savedCurrency = SharedPrefsHelper.getCurrency(this)
-        val index = currencySymbols.indexOf(savedCurrency)
-        if (index >= 0) spinnerCurrency.setSelection(index)
-
-        spinnerCurrency.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
-            override fun onItemSelected(parent: AdapterView<*>, view: android.view.View, position: Int, id: Long) {
-                val selectedCurrency = currencySymbols[position]
-                SharedPrefsHelper.saveCurrency(this@BudgetSetupActivity, selectedCurrency)
-                showBudgetStatus(SharedPrefsHelper.getBudget(this@BudgetSetupActivity))
+        // Spinner setup
+        Spinner(this).also { adapter ->
+            adapter.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, currencySymbols).apply {
+                setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
             }
-
-            override fun onNothingSelected(parent: AdapterView<*>) {}
+            spinnerCurrency.adapter = adapter.adapter
         }
 
-        btnBack.setOnClickListener {
-            val intent = Intent(this, MainActivity::class.java)
-            startActivity(intent)
-            finish()
-        }
+        btnBack.setOnClickListener { finish() }
 
-        val currentBudget = SharedPrefsHelper.getBudget(this)
-        if (currentBudget > 0) {
-            etBudget.setText(currentBudget.toString())
+        // Load existing settings
+        lifecycleScope.launch {
+            val s = settingsDao.getSettings()
+            withContext(Dispatchers.Main) {
+                if (s != null) {
+                    etBudget.setText(s.budget.toString())
+                    val pos = currencySymbols.indexOf(s.currencySymbol)
+                    if (pos >= 0) spinnerCurrency.setSelection(pos)
+                }
+                refreshStatus()
+            }
         }
-
-        showBudgetStatus(currentBudget)
 
         btnSaveBudget.setOnClickListener {
-            val input = etBudget.text.toString()
-            if (input.isNotEmpty()) {
-                try {
-                    val newBudget = input.toDouble()
-                    SharedPrefsHelper.saveBudget(this, newBudget)
-                    Toast.makeText(this, getString(R.string.budget_saved), Toast.LENGTH_SHORT).show()
-                    showBudgetStatus(newBudget)
+            val bText = etBudget.text.toString().trim()
+            val bValue = bText.toDoubleOrNull()
+            if (bValue == null || bValue <= 0) {
+                Toast.makeText(this, "Please enter a valid budget", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            val cur = currencySymbols[spinnerCurrency.selectedItemPosition]
 
-                    val totalSpent = SharedPrefsHelper.getExpenses(this)
-                    when {
-                        totalSpent > newBudget -> {
-                            NotificationHelper.sendBudgetAlert(this, "You have exceeded your budget!")
-                        }
-                        totalSpent >= newBudget * 0.9 -> {
-                            NotificationHelper.sendBudgetAlert(this, "Warning: You are about to reach your budget limit!")
-                        }
+            lifecycleScope.launch {
+                val existing = settingsDao.getSettings()
+                val all = transactionDao.getAllTransactions()
+                val spent = all.filter { !it.category.equals("Income", true) }.sumOf { it.amount }
+
+                val settings = Settings(
+                    id = 1,
+                    income = existing?.income ?: 0.0,
+                    expenses = existing?.expenses ?: 0.0,
+                    budget = bValue,
+                    currencySymbol = cur
+                )
+                settingsDao.insert(settings)
+
+                val fmt = DecimalFormat("#,###.00")
+                val budgetStr = fmt.format(bValue)
+                val spentStr = fmt.format(spent)
+
+                when {
+                    spent > bValue -> {
+                        val exceedStr = fmt.format(spent - bValue)
+                        val message = """
+                            Your total expenses ($cur$spentStr) have exceeded your budget ($cur$budgetStr)!
+                            You have exceeded by $cur$exceedStr.
+                        """.trimIndent()
+                        sendBudgetNotification("⚠️ Budget Exceeded", message)
                     }
 
-                    val intent = Intent(this, MainActivity::class.java)
-                    startActivity(intent)
-                    finish()
-
-                } catch (e: NumberFormatException) {
-                    Toast.makeText(this, getString(R.string.invalid_budget), Toast.LENGTH_SHORT).show()
+                    spent >= 0.9 * bValue -> {
+                        val remainingStr = fmt.format(bValue - spent)
+                        val message = """
+                            Your total expenses ($cur$spentStr) are nearing your budget limit ($cur$budgetStr).
+                            Only $cur$remainingStr left before you exceed your budget.
+                        """.trimIndent()
+                        sendBudgetNotification("⚠️ Budget Warning", message)
+                    }
                 }
-            } else {
-                Toast.makeText(this, getString(R.string.enter_budget), Toast.LENGTH_SHORT).show()
+
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@BudgetSetupActivity, "Budget saved", Toast.LENGTH_SHORT).show()
+                    startActivity(Intent(this@BudgetSetupActivity, MainActivity::class.java))
+                    finish()
+                }
             }
         }
     }
 
-    private fun showBudgetStatus(budget: Double) {
-        if (budget <= 0) return
+    private fun refreshStatus() {
+        lifecycleScope.launch {
+            val all = transactionDao.getAllTransactions()
+            val income = all.filter { it.category.equals("Income", true) }
+                .sumOf { it.amount }
+            val spent = all.filter { !it.category.equals("Income", true) }
+                .sumOf { it.amount }
 
-        val totalSpent = SharedPrefsHelper.getExpenses(this)
-        val difference = totalSpent - budget
-        val currency = SharedPrefsHelper.getCurrency(this)
+            val s = settingsDao.getSettings()
+            val budget = s?.budget ?: 0.0
+            val currency = s?.currencySymbol ?: currencySymbols[0]
 
-        val statusText: String
-        val statusColor: Int
+            val fmt = DecimalFormat("#,###.00")
+            val exceedAmount = spent - budget
+            val remaining = budget - spent
 
-        when {
-            totalSpent > budget -> {
-                statusText = "You have spent $currency${String.format("%.2f", totalSpent)} / $currency$budget\n" +
-                        "⚠️ Budget Exceeded by $currency${String.format("%.2f", difference)}"
-                statusColor = getColor(R.color.warningColor)
+            val status = buildString {
+                append("Income: $currency${fmt.format(income)}\n")
+                append("Spent:  $currency${fmt.format(spent)}\n")
+                append("Budget: $currency${fmt.format(budget)}\n\n")
+
+                when {
+                    spent > budget -> append("⚠️ Budget Exceeded by $currency${fmt.format(exceedAmount)}")
+                    spent >= 0.9 * budget -> append("⚠️ Near budget limit. Only $currency${fmt.format(remaining)} left")
+                    else -> append("✅ Within budget. $currency${fmt.format(remaining)} remaining")
+                }
             }
-            totalSpent >= budget * 0.9 -> {
-                statusText = "You have spent $currency${String.format("%.2f", totalSpent)} / $currency$budget\n" +
-                        "⚠️ Warning: You are about to reach your budget limit!"
-                statusColor = getColor(R.color.warningColor)
+
+            val colorRes = when {
+                spent > budget || spent >= 0.9 * budget -> R.color.warningColor
+                else -> R.color.sucessColor
             }
-            else -> {
-                statusText = "You have spent $currency${String.format("%.2f", totalSpent)} / $currency$budget"
-                statusColor = getColor(R.color.sucessColor)
+
+            withContext(Dispatchers.Main) {
+                tvBudgetStatus.text = status
+                tvBudgetStatus.setTextColor(resources.getColor(colorRes, null))
             }
         }
+    }
 
-        tvBudgetStatus.text = statusText
-        tvBudgetStatus.setTextColor(statusColor)
+    private fun sendBudgetNotification(title: String, message: String) {
+        val channelId = "budget_notifications"
+        val notificationId = 1001
+        val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+            val channel = NotificationChannel(
+                channelId,
+                "Budget Notifications",
+                NotificationManager.IMPORTANCE_HIGH
+            ).apply {
+                description = "Notifies about budget limit and overspending"
+            }
+            notificationManager.createNotificationChannel(channel)
+        }
+
+        val notification = NotificationCompat.Builder(this, channelId)
+            .setSmallIcon(android.R.drawable.ic_dialog_alert) // Replace with your custom icon
+            .setContentTitle(title)
+            .setContentText(message.lines().first()) // Short summary
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message)) // Full message
+            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setAutoCancel(true)
+            .build()
+
+        notificationManager.notify(notificationId, notification)
     }
 }

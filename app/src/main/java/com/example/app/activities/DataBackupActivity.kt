@@ -5,11 +5,14 @@ import android.os.Bundle
 import android.widget.Button
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import com.example.app.R
+import com.example.app.database.AppDatabase
 import com.example.app.models.Transaction
-import com.example.app.utils.SharedPrefsHelper
+import com.example.app.models.Settings
 import com.google.gson.Gson
 import com.google.gson.reflect.TypeToken
+import kotlinx.coroutines.launch
 import java.io.IOException
 
 class DataBackupActivity : AppCompatActivity() {
@@ -24,52 +27,67 @@ class DataBackupActivity : AppCompatActivity() {
             startActivity(Intent(this, MainActivity::class.java))
             finish()
         }
+
         findViewById<Button>(R.id.btnExport).setOnClickListener { exportData() }
         findViewById<Button>(R.id.btnImport).setOnClickListener { importData() }
     }
 
     private fun exportData() {
-        val transactions = SharedPrefsHelper.getTransactions(this)
-        val currencySymbol = SharedPrefsHelper.getCurrency(this)
+        lifecycleScope.launch {
+            try {
+                val db = AppDatabase.getInstance(applicationContext)
+                val transactions = db.transactionDao().getAllTransactions()
+                val settings = db.settingsDao().getSettings()
 
-        // Combine into a single map
-        val backupData = mapOf(
-            "transactions"   to transactions,
-            "currencySymbol" to currencySymbol
-        )
+                val backupData = mapOf(
+                    "transactions" to transactions,
+                    "settings" to settings
+                )
 
-        val json = Gson().toJson(backupData)
-        try {
-            openFileOutput(fileName, MODE_PRIVATE).use { it.write(json.toByteArray()) }
-            Toast.makeText(this, "Exported successfully!", Toast.LENGTH_SHORT).show()
-        } catch (e: IOException) {
-            e.printStackTrace()
-            Toast.makeText(this, "Export failed!", Toast.LENGTH_SHORT).show()
+                val json = Gson().toJson(backupData)
+
+                openFileOutput(fileName, MODE_PRIVATE).use {
+                    it.write(json.toByteArray())
+                }
+
+                Toast.makeText(this@DataBackupActivity, "Exported successfully!", Toast.LENGTH_SHORT).show()
+            } catch (e: IOException) {
+                e.printStackTrace()
+                Toast.makeText(this@DataBackupActivity, "Export failed!", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 
     private fun importData() {
-        try {
-            val json = openFileInput(fileName).bufferedReader().use { it.readText() }
-            val type = object : TypeToken<Map<String, Any>>() {}.type
-            val backupData: Map<String, Any> = Gson().fromJson(json, type)
+        lifecycleScope.launch {
+            try {
+                val json = openFileInput(fileName).bufferedReader().use { it.readText() }
+                val mapType = object : TypeToken<Map<String, Any>>() {}.type
+                val backupData: Map<String, Any> = Gson().fromJson(json, mapType)
 
-            // Transactions list
-            val transactionsJson = Gson().toJson(backupData["transactions"])
-            val listType = object : TypeToken<List<Transaction>>() {}.type
-            val transactionList: List<Transaction> = Gson().fromJson(transactionsJson, listType)
+                val db = AppDatabase.getInstance(applicationContext)
 
-            // Currency symbol
-            val currencySymbol = backupData["currencySymbol"] as? String ?: "₨"
+                // Deserialize transactions
+                val transactionsJson = Gson().toJson(backupData["transactions"])
+                val transactionListType = object : TypeToken<List<Transaction>>() {}.type
+                val transactionList: List<Transaction> = Gson().fromJson(transactionsJson, transactionListType)
 
-            // Save both via helper
-            SharedPrefsHelper.saveAllTransactions(this, transactionList)
-            SharedPrefsHelper.saveCurrency(this, currencySymbol)
+                db.transactionDao().insertAll(*transactionList.toTypedArray())
 
-            Toast.makeText(this, "Imported successfully!", Toast.LENGTH_SHORT).show()
-        } catch (e: IOException) {
-            e.printStackTrace()
-            Toast.makeText(this, "Import failed!", Toast.LENGTH_SHORT).show()
+                // Deserialize settings
+                val settingsJson = Gson().toJson(backupData["settings"])
+                val settings: Settings = Gson().fromJson(settingsJson, Settings::class.java)
+
+                db.settingsDao().insert(settings)
+
+                Toast.makeText(this@DataBackupActivity, "Imported successfully!", Toast.LENGTH_SHORT).show()
+            } catch (e: IOException) {
+                e.printStackTrace()
+                Toast.makeText(this@DataBackupActivity, "Import failed!", Toast.LENGTH_SHORT).show()
+            } catch (e: Exception) {
+                e.printStackTrace()
+                Toast.makeText(this@DataBackupActivity, "Data format error!", Toast.LENGTH_SHORT).show()
+            }
         }
     }
 }

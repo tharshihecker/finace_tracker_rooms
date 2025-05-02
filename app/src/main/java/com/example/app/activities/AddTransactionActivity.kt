@@ -10,10 +10,14 @@ import android.widget.*
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
+import androidx.lifecycle.lifecycleScope
 import com.example.app.R
+import com.example.app.database.AppDatabase
 import com.example.app.models.Transaction
 import com.example.app.utils.NotificationHelper
-import com.example.app.utils.SharedPrefsHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.text.DecimalFormat
 
 class AddTransactionActivity : AppCompatActivity() {
@@ -64,34 +68,33 @@ class AddTransactionActivity : AppCompatActivity() {
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, categories)
         spinnerCategory.adapter = adapter
 
-        // Budget and Expense info
-        updateBudgetAndExpenses()
-
         // Check if in edit mode
         isEditing = intent.getBooleanExtra("isEditing", false)
         transactionId = intent.getLongExtra("transactionId", -1L)
 
         if (isEditing && transactionId != -1L) {
-            val transactions = SharedPrefsHelper.getTransactions(this)
-            currentTransaction = transactions.find { it.id == transactionId }
+            lifecycleScope.launch {
+                currentTransaction = AppDatabase.getInstance(this@AddTransactionActivity)
+                    .transactionDao()
+                    .getTransactionById(transactionId)
 
-            currentTransaction?.let { txn ->
-                etTitle.setText(txn.title)
-                etAmount.setText(txn.amount.toString())
-                spinnerCategory.setSelection(categories.indexOf(txn.category))
+                currentTransaction?.let { txn ->
+                    etTitle.setText(txn.title)
+                    etAmount.setText(txn.amount.toString())
+                    spinnerCategory.setSelection(categories.indexOf(txn.category))
 
-                val parts = txn.date.split("-") // Format: dd-MM-yyyy
-                if (parts.size == 3) {
-                    datePicker.updateDate(parts[2].toInt(), parts[1].toInt() - 1, parts[0].toInt())
+                    val parts = txn.date.split("-")
+                    if (parts.size == 3) {
+                        datePicker.updateDate(parts[2].toInt(), parts[1].toInt() - 1, parts[0].toInt())
+                    }
+
+                    btnDelete.visibility = Button.VISIBLE
                 }
-
-                btnDelete.visibility = Button.VISIBLE
             }
         } else {
             btnDelete.visibility = Button.GONE
         }
 
-        // Save transaction
         btnSave.setOnClickListener {
             val title = etTitle.text.toString().trim()
             val amountText = etAmount.text.toString().trim()
@@ -110,59 +113,52 @@ class AddTransactionActivity : AppCompatActivity() {
             val category = spinnerCategory.selectedItem.toString()
             val date = "${datePicker.dayOfMonth}-${datePicker.month + 1}-${datePicker.year}"
 
-            if (isEditing && currentTransaction != null) {
-                val updatedTransaction = currentTransaction!!.copy(
-                    title = title, amount = amount, category = category, date = date
-                )
-                SharedPrefsHelper.updateTransaction(this, updatedTransaction)
-                Toast.makeText(this, getString(R.string.transaction_updated), Toast.LENGTH_SHORT).show()
-            } else {
-                val newTransaction = Transaction(
-                    id = System.currentTimeMillis(), title = title, amount = amount,
-                    category = category, date = date
-                )
-                SharedPrefsHelper.saveTransaction(this, newTransaction)
-                Toast.makeText(this, getString(R.string.transaction_saved), Toast.LENGTH_SHORT).show()
-            }
+            lifecycleScope.launch {
+                if (isEditing && currentTransaction != null) {
+                    val updatedTransaction = currentTransaction!!.copy(
+                        title = title, amount = amount, category = category, date = date
+                    )
+                    AppDatabase.getInstance(this@AddTransactionActivity).transactionDao().updateTransaction(updatedTransaction)
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@AddTransactionActivity, getString(R.string.transaction_updated), Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    val newTransaction = Transaction(
+                        id = System.currentTimeMillis(),
+                        title = title,
+                        amount = amount,
+                        category = category,
+                        date = date
+                    )
+                    AppDatabase.getInstance(this@AddTransactionActivity).transactionDao().insertTransaction(newTransaction)
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@AddTransactionActivity, getString(R.string.transaction_saved), Toast.LENGTH_SHORT).show()
+                    }
+                }
 
-            checkIfBudgetExceeded()
-            finish()
-        }
 
-        // Delete transaction
-        btnDelete.setOnClickListener {
-            currentTransaction?.let {
-                SharedPrefsHelper.deleteTransaction(this, it)
-                Toast.makeText(this, getString(R.string.transaction_deleted), Toast.LENGTH_SHORT).show()
                 checkIfBudgetExceeded()
+
                 finish()
             }
         }
 
-        // Check notification permissions
-        checkNotificationPermission()
-    }
-
-    private fun updateBudgetAndExpenses() {
-        val currentBudget = SharedPrefsHelper.getBudget(this)
-        val totalExpenses = SharedPrefsHelper.getExpenses(this)
-        val currency = SharedPrefsHelper.getCurrency(this) // Retrieve currency symbol
-
-        // Use a DecimalFormat to format the amounts
-        val formatter = DecimalFormat("#,###.00")
-
-        val statusColor = if (totalExpenses > currentBudget) {
-            getColor(R.color.warningColor) // red
-        } else {
-            getColor(R.color.sucessColor)  // green
+        btnDelete.setOnClickListener {
+            currentTransaction?.let {
+                lifecycleScope.launch {
+                    AppDatabase.getInstance(this@AddTransactionActivity).transactionDao().deleteTransaction(it)
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@AddTransactionActivity, getString(R.string.transaction_deleted), Toast.LENGTH_SHORT).show()
+                    }
+                    checkIfBudgetExceeded()
+                    finish()
+                }
+            }
         }
 
-        // Format the text with currency symbol
-        val statusText = "Current Budget: $currency${formatter.format(currentBudget)}\n" +
-                "Total Spent: $currency${formatter.format(totalExpenses)}"
+        checkNotificationPermission()
+        checkIfBudgetExceeded()
 
-        tvCurrentBudget.text = statusText
-        tvCurrentBudget.setTextColor(statusColor)
     }
 
     private fun checkNotificationPermission() {
@@ -177,23 +173,50 @@ class AddTransactionActivity : AppCompatActivity() {
     }
 
     private fun checkIfBudgetExceeded() {
-        val totalExpenses = SharedPrefsHelper.getExpenses(this)
-        val budget = SharedPrefsHelper.getBudget(this)
-        val currency = SharedPrefsHelper.getCurrency(this) // Retrieve currency symbol
+        lifecycleScope.launch {
+            val dao = AppDatabase.getInstance(this@AddTransactionActivity)
+            val transactions = dao.transactionDao().getAllTransactions()
+            val totalExpenses = transactions
+                .filter { !it.category.equals("Income", ignoreCase = true) }
+                .sumOf { it.amount }
 
-        updateBudgetAndExpenses()
+            val settings = dao.settingsDao().getSettings()
+            val budget = settings?.budget ?: 0.0
+            val currency = settings?.currencySymbol ?: "$"
 
-        if (totalExpenses > budget) {
-            val exceededAmount = totalExpenses - budget
-            val message = "Your total expenses ($currency${totalExpenses}) have exceeded your budget ($currency${budget})! " +
-                    "You have exceeded by $currency${exceededAmount}."
-            checkAndSendNotification(message)
-        } else if (totalExpenses >= 0.9 * budget) {
-            val remaining = budget - totalExpenses
-            val message = "Warning: You are about to reach your budget limit!\n" +
-                    "Only $currency${remaining} remaining from your budget of $currency${budget}."
-            checkAndSendNotification(message)
+            withContext(Dispatchers.Main) {
+                updateBudgetAndExpenses(totalExpenses, budget, currency)
+            }
+
+            if (budget == 0.0) return@launch
+
+            if (totalExpenses > budget) {
+                val exceededAmount = totalExpenses - budget
+                val message = "Your total expenses ($currency${format(totalExpenses)}) have exceeded your budget ($currency${format(budget)})! " +
+                        "You have exceeded by $currency${format(exceededAmount)}."
+                checkAndSendNotification(message)
+            } else if (totalExpenses >= 0.9 * budget) {
+                val remaining = budget - totalExpenses
+                val message = "Warning: You are about to reach your budget limit!\n" +
+                        "Only $currency${format(remaining)} remaining from your budget of $currency${format(budget)}."
+                checkAndSendNotification(message)
+            }
         }
+    }
+
+    private fun updateBudgetAndExpenses(totalExpenses: Double, budget: Double, currency: String) {
+        val formatter = DecimalFormat("#,###.00")
+        val statusColor = if (totalExpenses > budget) {
+            getColor(R.color.warningColor)
+        } else {
+            getColor(R.color.sucessColor)
+        }
+
+        val statusText = "Current Budget: $currency${formatter.format(budget)}\n" +
+                "Total Spent: $currency${formatter.format(totalExpenses)}"
+
+        tvCurrentBudget.text = statusText
+        tvCurrentBudget.setTextColor(statusColor)
     }
 
     private fun checkAndSendNotification(message: String) {
@@ -204,5 +227,9 @@ class AddTransactionActivity : AppCompatActivity() {
         } else {
             Log.w("AddTransactionActivity", "Notification permission not granted")
         }
+    }
+
+    private fun format(value: Double): String {
+        return DecimalFormat("#,###.00").format(value)
     }
 }

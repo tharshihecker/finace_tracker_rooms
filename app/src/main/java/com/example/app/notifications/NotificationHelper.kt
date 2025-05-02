@@ -33,7 +33,7 @@ object NotificationHelper {
 
         val notification = NotificationCompat.Builder(context, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_notification)
-            .setContentTitle("Budget Alert")
+            .setContentTitle("Tracker Alert")
             .setStyle(NotificationCompat.BigTextStyle().bigText(message)) // ⭐ Shows full text
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)

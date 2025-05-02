@@ -4,9 +4,13 @@ import android.content.Intent
 import android.os.Bundle
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import com.example.app.R
+import com.example.app.database.AppDatabase
 import com.example.app.models.Transaction
-import com.example.app.utils.SharedPrefsHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class AddIncomeActivity : AppCompatActivity() {
 
@@ -24,11 +28,15 @@ class AddIncomeActivity : AppCompatActivity() {
     // Define currency as a class-level property
     private lateinit var currency: String
 
+    // Initialize AppDatabase and TransactionDao using the correct getInstance method
+    private val transactionDao by lazy { AppDatabase.getInstance(this).transactionDao() }
+    private val settingsDao by lazy { AppDatabase.getInstance(this).settingsDao() }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_add_income)
 
-        // UI init
+        // UI initialization
         tvCurrentIncome = findViewById(R.id.tvCurrentIncome)
         etTitle = findViewById(R.id.etTitle)
         etAmount = findViewById(R.id.etAmount)
@@ -36,31 +44,29 @@ class AddIncomeActivity : AppCompatActivity() {
         btnSave = findViewById(R.id.btnSave)
         btnBack = findViewById(R.id.btnBack)
 
-        // Get the currency symbol
-        currency = SharedPrefsHelper.getCurrency(this)
-
         // Check if we're editing an existing transaction
         isEditing = intent.getBooleanExtra("isEditing", false)
         if (isEditing) {
             editingTransactionId = intent.getLongExtra("transactionId", -1L)
-            // Load existing transaction
-            val existing = SharedPrefsHelper.getTransactions(this)
-                .firstOrNull { it.id == editingTransactionId }
-            existing?.let {
-                etTitle.setText(it.title)
-                etAmount.setText(it.amount.toString())
-                // Date stored as "day-month-year"
-                val parts = it.date.split("-")
-                if (parts.size == 3) {
-                    val day = parts[0].toInt()
-                    val month = parts[1].toInt() - 1  // DatePicker months are 0-based
-                    val year = parts[2].toInt()
-                    datePicker.updateDate(year, month, day)
+            // Load existing transaction from Room
+            lifecycleScope.launch {
+                val existing = transactionDao.getTransactionById(editingTransactionId)
+                existing?.let {
+                    etTitle.setText(it.title)
+                    etAmount.setText(it.amount.toString())
+                    // Date stored as "day-month-year"
+                    val parts = it.date.split("-")
+                    if (parts.size == 3) {
+                        val day = parts[0].toInt()
+                        val month = parts[1].toInt() - 1  // DatePicker months are 0-based
+                        val year = parts[2].toInt()
+                        datePicker.updateDate(year, month, day)
+                    }
                 }
             }
         }
 
-        // Show current income and actual total expenses
+        // Show current income and actual total expenses using Room data
         updateIncomeAndExpenses()
 
         // Save income logic
@@ -82,36 +88,37 @@ class AddIncomeActivity : AppCompatActivity() {
             // Format date as day-month-year
             val date = "${datePicker.dayOfMonth}-${datePicker.month + 1}-${datePicker.year}"
 
-            if (isEditing && editingTransactionId != -1L) {
-                // Update existing
-                val transactions = SharedPrefsHelper.getTransactions(this).toMutableList()
-                val index = transactions.indexOfFirst { it.id == editingTransactionId }
-                if (index != -1) {
-                    transactions[index] = Transaction(
+            lifecycleScope.launch {
+                if (isEditing && editingTransactionId != -1L) {
+                    // Update existing transaction in Room
+                    val updatedTransaction = Transaction(
                         id = editingTransactionId,
                         title = title,
                         amount = amount,
                         category = "Income",
                         date = date
                     )
-                    SharedPrefsHelper.saveAllTransactions(this, transactions)
-                    Toast.makeText(this, "Income updated", Toast.LENGTH_SHORT).show()
+                    transactionDao.updateTransaction(updatedTransaction)
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@AddIncomeActivity, "Income updated", Toast.LENGTH_SHORT).show()
+                    }
+                } else {
+                    // Create new transaction in Room
+                    val newTransaction = Transaction(
+                        id = System.currentTimeMillis(),
+                        title = title,
+                        amount = amount,
+                        category = "Income",
+                        date = date
+                    )
+                    transactionDao.insertTransaction(newTransaction)
+                    withContext(Dispatchers.Main) {
+                        Toast.makeText(this@AddIncomeActivity, "Income saved", Toast.LENGTH_SHORT).show()
+                    }
                 }
-            } else {
-                // Create new
-                val newTransaction = Transaction(
-                    id = System.currentTimeMillis(),
-                    title = title,
-                    amount = amount,
-                    category = "Income",
-                    date = date
-                )
-                SharedPrefsHelper.saveTransaction(this, newTransaction)
-                Toast.makeText(this, "Income saved", Toast.LENGTH_SHORT).show()
+                updateIncomeAndExpenses()  // Update UI after saving
+                finish() // Go back after saving
             }
-
-            updateIncomeAndExpenses()
-            finish() // Go back after saving
         }
 
         // Navigate back
@@ -122,16 +129,36 @@ class AddIncomeActivity : AppCompatActivity() {
     }
 
     private fun updateIncomeAndExpenses() {
-        val currentIncome = SharedPrefsHelper.getIncome(this)
-        val totalExpenses = SharedPrefsHelper.getExpenses(this)
+        lifecycleScope.launch {
+            val db = AppDatabase.getInstance(this@AddIncomeActivity)
+            val txDao = db.transactionDao()
+            val settings = settingsDao.getSettings()
 
-        if (totalExpenses > currentIncome) {
-            tvCurrentIncome.setTextColor(resources.getColor(R.color.warningColor, null))  // Warning color
-            tvCurrentIncome.text = "Warning!\nSpent: $currency$totalExpenses is more than Income: $currency$currentIncome"
-        } else {
-            tvCurrentIncome.setTextColor(resources.getColor(R.color.sucessColor, null))  // Success color
-            tvCurrentIncome.text = "Current Income: $currency$currentIncome\nTotal Spent: $currency$totalExpenses"
+            // 1) Sum actual income & expenses
+            val allTxns = txDao.getAllTransactions()
+            val currentIncome = allTxns.filter { it.category.equals("Income", true) }
+                .sumOf { it.amount }
+            val totalExpenses = allTxns.filter { !it.category.equals("Income", true) }
+                .sumOf { it.amount }
+
+            // 2) Get currency & (optional) budget
+            currency = settings?.currencySymbol ?: "₹"
+            val budget = settings?.budget ?: 0.0
+
+            // 3) Update UI on main thread
+            withContext(Dispatchers.Main) {
+                tvCurrentIncome.setTextColor(
+                    if (totalExpenses > currentIncome) getColor(R.color.warningColor)
+                    else getColor(R.color.sucessColor)
+                )
+
+                tvCurrentIncome.text = if (totalExpenses > currentIncome) {
+                    "Warning!\nSpent: $currency${"%.2f".format(totalExpenses)} is more than Income: $currency${"%.2f".format(currentIncome)}"
+                } else {
+                    "Current Income: $currency${"%.2f".format(currentIncome)}\nTotal Spent: $currency${"%.2f".format(totalExpenses)}"
+                }
+            }
         }
     }
-}
 
+}

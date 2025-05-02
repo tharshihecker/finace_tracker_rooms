@@ -10,10 +10,14 @@ import android.widget.LinearLayout
 import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import com.example.app.R
+import com.example.app.database.AppDatabase
 import com.example.app.models.Transaction
 import com.example.app.utils.NotificationHelper
-import com.example.app.utils.SharedPrefsHelper
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 
 class ManageTransactionActivity : AppCompatActivity() {
 
@@ -21,61 +25,74 @@ class ManageTransactionActivity : AppCompatActivity() {
     private lateinit var emptyText: TextView
     private lateinit var btnBack: Button
     private lateinit var clearAllButton: Button
-    private lateinit var transactions: MutableList<Transaction>
-    private var currencySymbol: String = "Rs." // Default currency
+    private var transactions: MutableList<Transaction> = mutableListOf()
+    private var currencySymbol: String = "Rs."
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_manage_transaction)
 
-        // Bind views
-        summaryLayout   = findViewById(R.id.categorySummaryLayout)
-        emptyText       = findViewById(R.id.tvNoData)
-        btnBack         = findViewById(R.id.btnBack)
-        clearAllButton  = findViewById(R.id.clearAllButton)
+        summaryLayout = findViewById(R.id.categorySummaryLayout)
+        emptyText = findViewById(R.id.tvNoData)
+        btnBack = findViewById(R.id.btnBack)
+        clearAllButton = findViewById(R.id.clearAllButton)
 
-        // Back navigates up
         btnBack.setOnClickListener { finish() }
 
-        // Clear all handler
         clearAllButton.setOnClickListener {
-            SharedPrefsHelper.clearAllTransactions(this)
-            Toast.makeText(this, "All transactions deleted", Toast.LENGTH_SHORT).show()
+            lifecycleScope.launch {
+                AppDatabase.getInstance(this@ManageTransactionActivity)
+                    .transactionDao()
+                    .deleteAllTransactions()
 
-            // Show notification
-            NotificationHelper.sendBudgetAlert(
-                context = this,
-                message = "All transactions have been reset."
-            )
-
-            transactions.clear()
-            displayTransactions()
+                withContext(Dispatchers.Main) {
+                    Toast.makeText(this@ManageTransactionActivity, "All transactions deleted", Toast.LENGTH_SHORT).show()
+                    NotificationHelper.sendBudgetAlert(this@ManageTransactionActivity, "All transactions have been reset.")
+                    transactions.clear()
+                    displayTransactions()
+                }
+            }
         }
 
-        // Load currency from SharedPreferences
-        currencySymbol = SharedPrefsHelper.getCurrency(this)
+        // ✅ Load currency symbol from Settings table
+        loadCurrencyFromSettings()
 
-        // Load and show transactions
-        transactions = SharedPrefsHelper.getTransactions(this).toMutableList()
-        displayTransactions()
+        loadTransactionsFromRoom()
+    }
+
+    private fun loadTransactionsFromRoom() {
+        lifecycleScope.launch {
+            val dao = AppDatabase.getInstance(this@ManageTransactionActivity).transactionDao()
+            transactions = dao.getAllTransactions().toMutableList()
+
+            withContext(Dispatchers.Main) {
+                displayTransactions()
+            }
+        }
+    }
+    private fun loadCurrencyFromSettings() {
+        lifecycleScope.launch {
+            val settings = AppDatabase.getInstance(this@ManageTransactionActivity)
+                .settingsDao()
+                .getSettings()
+
+            withContext(Dispatchers.Main) {
+                currencySymbol = settings?.currencySymbol ?: "Rs."
+            }
+        }
     }
 
     private fun displayTransactions() {
-        // First clear out any old views
         summaryLayout.removeAllViews()
 
         if (transactions.isEmpty()) {
-            // --- EMPTY STATE ---
             clearAllButton.isEnabled = false
 
-            // Re-style & re-add the emptyText view (since removeAllViews() took it out)
             emptyText.apply {
-                // Make it full width, centered, bold, big
                 layoutParams = LinearLayout.LayoutParams(
                     LinearLayout.LayoutParams.MATCH_PARENT,
                     LinearLayout.LayoutParams.WRAP_CONTENT
                 ).apply {
-                    // Directly using 32dp, converted to pixels
                     topMargin = (32 * resources.displayMetrics.density).toInt()
                 }
                 textSize = 40f
@@ -85,17 +102,14 @@ class ManageTransactionActivity : AppCompatActivity() {
                 visibility = View.VISIBLE
             }
             summaryLayout.addView(emptyText)
-
             return
         } else {
             clearAllButton.isEnabled = true
             emptyText.visibility = View.GONE
         }
 
-        // --- TRANSACTION LIST ---
         val grouped = transactions.groupBy { it.category }
         for ((category, txnList) in grouped) {
-            // Category header (optional: you can also bold this if you like)
             val categoryTitle = TextView(this).apply {
                 text = "$category:"
                 textSize = 25f
@@ -104,14 +118,12 @@ class ManageTransactionActivity : AppCompatActivity() {
             }
             summaryLayout.addView(categoryTitle)
 
-            // Each transaction
             txnList.forEach { txn ->
                 val itemLayout = LinearLayout(this).apply {
                     orientation = LinearLayout.VERTICAL
                     setPadding(16, 16, 16, 24)
                 }
 
-                // ↑–– Bigger, bold transaction details
                 val txnText = TextView(this).apply {
                     text = "• ${txn.title} | $currencySymbol ${"%.2f".format(txn.amount)} | ${txn.date}"
                     textSize = 25f
@@ -129,18 +141,15 @@ class ManageTransactionActivity : AppCompatActivity() {
                     textSize = 18f
                     setTypeface(typeface, Typeface.BOLD)
                     setPadding(24, 16, 24, 16)
-                    setTextColor(getColor(R.color.accent)) // Add padding for a bigger button
+                    setTextColor(getColor(R.color.accent))
 
                     setOnClickListener {
-                        // Check if the transaction is income type
                         val isIncome = txn.category.equals("income", ignoreCase = true)
-
                         val intent = if (isIncome) {
                             Intent(this@ManageTransactionActivity, AddIncomeActivity::class.java)
                         } else {
                             Intent(this@ManageTransactionActivity, AddTransactionActivity::class.java)
                         }
-
                         intent.putExtra("isEditing", true)
                         intent.putExtra("transactionId", txn.id)
                         startActivity(intent)
@@ -149,15 +158,24 @@ class ManageTransactionActivity : AppCompatActivity() {
 
                 val deleteBtn = Button(this).apply {
                     text = "Delete"
-                    textSize = 18f // Increase text size
-                    setTypeface(typeface, Typeface.BOLD) // Make text bold
+                    textSize = 18f
+                    setTypeface(typeface, Typeface.BOLD)
                     setPadding(24, 16, 24, 16)
-                    setTextColor(getColor(R.color.accent)) // Add padding for a bigger button
+                    setTextColor(getColor(R.color.accent))
+
                     setOnClickListener {
-                        transactions.remove(txn)
-                        SharedPrefsHelper.saveAllTransactions(this@ManageTransactionActivity, transactions)
-                        Toast.makeText(this@ManageTransactionActivity, "Transaction deleted", Toast.LENGTH_SHORT).show()
-                        displayTransactions()
+                        lifecycleScope.launch {
+                            AppDatabase.getInstance(this@ManageTransactionActivity)
+                                .transactionDao()
+                                .deleteTransaction(txn)
+
+                            transactions.remove(txn)
+
+                            withContext(Dispatchers.Main) {
+                                Toast.makeText(this@ManageTransactionActivity, "Transaction deleted", Toast.LENGTH_SHORT).show()
+                                displayTransactions()
+                            }
+                        }
                     }
                 }
 
@@ -173,8 +191,6 @@ class ManageTransactionActivity : AppCompatActivity() {
 
     override fun onResume() {
         super.onResume()
-        // Refresh after returning from Add/Edit
-        transactions = SharedPrefsHelper.getTransactions(this).toMutableList()
-        displayTransactions()
+        loadTransactionsFromRoom()
     }
 }

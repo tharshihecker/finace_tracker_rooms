@@ -3,16 +3,17 @@ package com.example.app.activities
 import android.content.Intent
 import android.graphics.Typeface
 import android.os.Bundle
-import android.view.Gravity
 import android.view.View
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ScrollView
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
+import androidx.lifecycle.lifecycleScope
 import com.example.app.R
+import com.example.app.database.AppDatabase
 import com.example.app.models.Transaction
-import com.example.app.utils.SharedPrefsHelper
+import kotlinx.coroutines.launch
 
 class CategoryAnalysisActivity : AppCompatActivity() {
 
@@ -20,16 +21,15 @@ class CategoryAnalysisActivity : AppCompatActivity() {
     private lateinit var emptyText: TextView
     private lateinit var btnBack: Button
     private lateinit var scrollContainer: ScrollView
-    private lateinit var transactions: List<Transaction>
-    private lateinit var currencySymbol: String // Variable to hold the currency symbol
+    private var currencySymbol: String = "Rs." // Default fallback symbol
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_category_analysis)
 
-        summaryLayout   = findViewById(R.id.categoryAnalysisLayout)
-        emptyText       = findViewById(R.id.tvNoDataCategory)
-        btnBack         = findViewById(R.id.btnBack)
+        summaryLayout = findViewById(R.id.categoryAnalysisLayout)
+        emptyText = findViewById(R.id.tvNoDataCategory)
+        btnBack = findViewById(R.id.btnBack)
         scrollContainer = findViewById(R.id.scrollContainer)
 
         btnBack.setOnClickListener {
@@ -38,14 +38,27 @@ class CategoryAnalysisActivity : AppCompatActivity() {
             finish()
         }
 
-        // Get the selected currency from SharedPreferences
-        currencySymbol = SharedPrefsHelper.getCurrency(this)
+        lifecycleScope.launch {
+            try {
+                // Safely fetch the currency symbol from settings
+                val settings = AppDatabase.getInstance(applicationContext).settingsDao().getSettings()
+                currencySymbol = settings?.currencySymbol ?: currencySymbol
 
-        transactions = SharedPrefsHelper.getTransactions(this)
-        displayAnalysis()
+                // Get all transactions
+                val transactions = AppDatabase.getInstance(applicationContext)
+                    .transactionDao()
+                    .getAllTransactions()
+
+                displayAnalysis(transactions)
+            } catch (e: Exception) {
+                emptyText.text = "Error loading data!"
+                emptyText.visibility = View.VISIBLE
+                summaryLayout.addView(emptyText)
+            }
+        }
     }
 
-    private fun displayAnalysis() {
+    private fun displayAnalysis(transactions: List<Transaction>) {
         summaryLayout.removeAllViews()
 
         if (transactions.isEmpty()) {
@@ -65,11 +78,9 @@ class CategoryAnalysisActivity : AppCompatActivity() {
         var colorIndex = 0
 
         for ((category, txns) in grouped) {
-            // Cycle through predefined colors
             val categoryColor = resources.getColor(colors[colorIndex % colors.size], null)
             colorIndex++
 
-            // Category Title
             val categoryTitle = TextView(this).apply {
                 text = "📂 $category"
                 textSize = 25f
@@ -81,7 +92,6 @@ class CategoryAnalysisActivity : AppCompatActivity() {
 
             var total = 0.0
             for (txn in txns) {
-                // Transaction Details: Title, Amount, and Date
                 val detail = TextView(this).apply {
                     text = "• ${txn.title}: $currencySymbol${"%.2f".format(txn.amount)} on ${txn.date}"
                     textSize = 18f
@@ -89,14 +99,12 @@ class CategoryAnalysisActivity : AppCompatActivity() {
                     setTextColor(resources.getColor(R.color.primaryText, null))
                     setPadding(32, 4, 0, 4)
                 }
-
                 summaryLayout.addView(detail)
                 total += txn.amount
             }
 
-            // Display total for the category
             val totalView = TextView(this).apply {
-                text = "➤ Total: $currencySymbol ${"%.2f".format(total)}"
+                text = "➤ Total: $currencySymbol${"%.2f".format(total)}"
                 textSize = 18f
                 setTypeface(null, Typeface.BOLD)
                 setTextColor(categoryColor)
@@ -105,6 +113,4 @@ class CategoryAnalysisActivity : AppCompatActivity() {
             summaryLayout.addView(totalView)
         }
     }
-
-
 }

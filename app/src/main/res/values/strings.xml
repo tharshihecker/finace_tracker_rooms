@@ -25,7 +25,7 @@
     <string name="import_data">Import Data</string>
     <string name="invalid_budget">Please enter a valid budget amount.</string>
     <string name="transaction_updated">transaction updated</string>
-    <string name="clear_all_transactions">Clear All Transactions</string>
+    <string name="clear_all_transactions">Reset All Transactions</string>
     <string name="sample_budget">Budget: Rs.0.00</string>
     <string name="back">back</string>
     <string name="nothing">nothing</string>

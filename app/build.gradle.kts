@@ -1,6 +1,7 @@
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
+    id("kotlin-kapt")
 }
 
 android {
@@ -41,7 +42,13 @@ dependencies {
     implementation(libs.material)
     implementation(libs.androidx.activity)
     implementation(libs.androidx.constraintlayout)
+    implementation(libs.room.runtime)
+    kapt(libs.room.compiler)
+    implementation(libs.room.ktx)
+    implementation ("org.jetbrains.kotlinx:kotlinx-coroutines-android:1.7.3") // or latest version
 
+    implementation ("androidx.lifecycle:lifecycle-runtime-ktx:2.8.7")  // Check for the latest version
+    implementation ("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
     // Add Gson dependency for JSON serialization/deserialization
     implementation(libs.gson)  // or the latest version
 
