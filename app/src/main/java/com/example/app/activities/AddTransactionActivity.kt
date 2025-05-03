@@ -36,7 +36,6 @@ class AddTransactionActivity : AppCompatActivity() {
     private var isEditing: Boolean = false
     private var transactionId: Long = -1L
 
-    // Launcher for notification permission
     private val requestNotificationPermissionLauncher = registerForActivityResult(
         ActivityResultContracts.RequestPermission()
     ) { isGranted ->
@@ -118,9 +117,14 @@ class AddTransactionActivity : AppCompatActivity() {
                     val updatedTransaction = currentTransaction!!.copy(
                         title = title, amount = amount, category = category, date = date
                     )
-                    AppDatabase.getInstance(this@AddTransactionActivity).transactionDao().updateTransaction(updatedTransaction)
+                    AppDatabase.getInstance(this@AddTransactionActivity).transactionDao()
+                        .updateTransaction(updatedTransaction)
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(this@AddTransactionActivity, getString(R.string.transaction_updated), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            this@AddTransactionActivity,
+                            getString(R.string.transaction_updated),
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
                 } else {
                     val newTransaction = Transaction(
@@ -130,15 +134,18 @@ class AddTransactionActivity : AppCompatActivity() {
                         category = category,
                         date = date
                     )
-                    AppDatabase.getInstance(this@AddTransactionActivity).transactionDao().insertTransaction(newTransaction)
+                    AppDatabase.getInstance(this@AddTransactionActivity).transactionDao()
+                        .insertTransaction(newTransaction)
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(this@AddTransactionActivity, getString(R.string.transaction_saved), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            this@AddTransactionActivity,
+                            getString(R.string.transaction_saved),
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
                 }
 
-
                 checkIfBudgetExceeded()
-
                 finish()
             }
         }
@@ -146,9 +153,14 @@ class AddTransactionActivity : AppCompatActivity() {
         btnDelete.setOnClickListener {
             currentTransaction?.let {
                 lifecycleScope.launch {
-                    AppDatabase.getInstance(this@AddTransactionActivity).transactionDao().deleteTransaction(it)
+                    AppDatabase.getInstance(this@AddTransactionActivity).transactionDao()
+                        .deleteTransaction(it)
                     withContext(Dispatchers.Main) {
-                        Toast.makeText(this@AddTransactionActivity, getString(R.string.transaction_deleted), Toast.LENGTH_SHORT).show()
+                        Toast.makeText(
+                            this@AddTransactionActivity,
+                            getString(R.string.transaction_deleted),
+                            Toast.LENGTH_SHORT
+                        ).show()
                     }
                     checkIfBudgetExceeded()
                     finish()
@@ -157,8 +169,7 @@ class AddTransactionActivity : AppCompatActivity() {
         }
 
         checkNotificationPermission()
-        checkIfBudgetExceeded()
-
+        updateBudgetStatusUIOnly() // Only update budget display, no notification
     }
 
     private fun checkNotificationPermission() {
@@ -172,6 +183,7 @@ class AddTransactionActivity : AppCompatActivity() {
         }
     }
 
+    // Used after Save/Delete only
     private fun checkIfBudgetExceeded() {
         lifecycleScope.launch {
             val dao = AppDatabase.getInstance(this@AddTransactionActivity)
@@ -200,6 +212,25 @@ class AddTransactionActivity : AppCompatActivity() {
                 val message = "Warning: You are about to reach your budget limit!\n" +
                         "Only $currency${format(remaining)} remaining from your budget of $currency${format(budget)}."
                 checkAndSendNotification(message)
+            }
+        }
+    }
+
+    // Used on activity start only
+    private fun updateBudgetStatusUIOnly() {
+        lifecycleScope.launch {
+            val dao = AppDatabase.getInstance(this@AddTransactionActivity)
+            val transactions = dao.transactionDao().getAllTransactions()
+            val totalExpenses = transactions
+                .filter { !it.category.equals("Income", ignoreCase = true) }
+                .sumOf { it.amount }
+
+            val settings = dao.settingsDao().getSettings()
+            val budget = settings?.budget ?: 0.0
+            val currency = settings?.currencySymbol ?: "$"
+
+            withContext(Dispatchers.Main) {
+                updateBudgetAndExpenses(totalExpenses, budget, currency)
             }
         }
     }
