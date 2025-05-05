@@ -6,16 +6,18 @@ import androidx.room.Room
 import androidx.room.RoomDatabase
 import com.example.app.models.Transaction
 import com.example.app.models.Settings
+import com.example.app.models.Feedback
 
 @Database(
-    entities = [Transaction::class, Settings::class],
-    version = 1,
+    entities = [Transaction::class, Settings::class, Feedback::class],
+    version = 2,
     exportSchema = false
 )
 abstract class AppDatabase : RoomDatabase() {
 
     abstract fun transactionDao(): TransactionDao
     abstract fun settingsDao(): SettingsDao
+    abstract fun feedbackDao(): FeedbackDao
 
     companion object {
         @Volatile
@@ -28,7 +30,7 @@ abstract class AppDatabase : RoomDatabase() {
                     AppDatabase::class.java,
                     "app_database"
                 )
-                    // You can add .fallbackToDestructiveMigration() if you want to auto-clear data on version upgrade
+                    .fallbackToDestructiveMigration() // ✅ Prevents crashes after schema changes
                     .build()
                 INSTANCE = instance
                 instance

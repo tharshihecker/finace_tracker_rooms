@@ -1,10 +1,11 @@
 package com.example.app.activities
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
-
+import com.example.app.activities.FeedbackActivity
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.Bundle
+import android.view.View
 import android.widget.Button
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
@@ -51,6 +52,9 @@ class MainActivity : AppCompatActivity() {
         }
         findViewById<Button>(R.id.btnHistroy).setOnClickListener {
             startActivity(Intent(this, ManageTransactionActivity::class.java))
+        }
+        findViewById<View>(R.id.btnFeedback).setOnClickListener {
+            startActivity(Intent(this, FeedbackActivity::class.java))
         }
     }
 

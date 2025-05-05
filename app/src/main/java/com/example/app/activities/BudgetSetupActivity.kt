@@ -5,6 +5,7 @@ import android.app.NotificationManager
 import android.content.Intent
 import android.os.Build
 import android.os.Bundle
+import android.view.View
 import android.widget.*
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationCompat
@@ -41,11 +42,18 @@ class BudgetSetupActivity : AppCompatActivity() {
         spinnerCurrency = findViewById(R.id.spinnerCurrency)
 
         // Spinner setup
-        Spinner(this).also { adapter ->
-            adapter.adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, currencySymbols).apply {
-                setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_item, currencySymbols).apply {
+            setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item)
+        }
+        spinnerCurrency.adapter = adapter
+
+        // When currency changes, refresh display
+        spinnerCurrency.onItemSelectedListener = object : AdapterView.OnItemSelectedListener {
+            override fun onItemSelected(parent: AdapterView<*>, view: View?, position: Int, id: Long) {
+                refreshStatus()
             }
-            spinnerCurrency.adapter = adapter.adapter
+
+            override fun onNothingSelected(parent: AdapterView<*>) {}
         }
 
         btnBack.setOnClickListener { finish() }
@@ -70,6 +78,7 @@ class BudgetSetupActivity : AppCompatActivity() {
                 Toast.makeText(this, "Please enter a valid budget", Toast.LENGTH_SHORT).show()
                 return@setOnClickListener
             }
+
             val cur = currencySymbols[spinnerCurrency.selectedItemPosition]
 
             lifecycleScope.launch {
@@ -122,14 +131,12 @@ class BudgetSetupActivity : AppCompatActivity() {
     private fun refreshStatus() {
         lifecycleScope.launch {
             val all = transactionDao.getAllTransactions()
-            val income = all.filter { it.category.equals("Income", true) }
-                .sumOf { it.amount }
-            val spent = all.filter { !it.category.equals("Income", true) }
-                .sumOf { it.amount }
+            val income = all.filter { it.category.equals("Income", true) }.sumOf { it.amount }
+            val spent = all.filter { !it.category.equals("Income", true) }.sumOf { it.amount }
 
             val s = settingsDao.getSettings()
             val budget = s?.budget ?: 0.0
-            val currency = s?.currencySymbol ?: currencySymbols[0]
+            val currency = currencySymbols[spinnerCurrency.selectedItemPosition]
 
             val fmt = DecimalFormat("#,###.00")
             val exceedAmount = spent - budget
@@ -176,10 +183,10 @@ class BudgetSetupActivity : AppCompatActivity() {
         }
 
         val notification = NotificationCompat.Builder(this, channelId)
-            .setSmallIcon(android.R.drawable.ic_dialog_alert) // Replace with your custom icon
+            .setSmallIcon(android.R.drawable.ic_dialog_alert)
             .setContentTitle(title)
-            .setContentText(message.lines().first()) // Short summary
-            .setStyle(NotificationCompat.BigTextStyle().bigText(message)) // Full message
+            .setContentText(message.lines().first())
+            .setStyle(NotificationCompat.BigTextStyle().bigText(message))
             .setPriority(NotificationCompat.PRIORITY_HIGH)
             .setAutoCancel(true)
             .build()

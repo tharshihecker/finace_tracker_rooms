@@ -9,5 +9,6 @@
     <color name="categoryOrange">#E64A19</color>     <!-- Deep Orange -->
     <color name="categoryTeal">#00796B</color>
     <color name="maroon">#800000</color>
+    <color name="star_yellow">#FFD700</color>
 
 </resources>
