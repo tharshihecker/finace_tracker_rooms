@@ -65,6 +65,14 @@
             android:orientation="vertical"
             android:padding="16dp">
 
+            <com.github.mikephil.charting.charts.PieChart
+                android:id="@+id/pieChart"
+                android:layout_width="match_parent"
+                android:layout_height="300dp"
+                android:layout_marginBottom="16dp"
+                android:layout_gravity="center_horizontal"
+                tools:ignore="MissingClass" />
+
             <TextView
                 android:id="@+id/tvNoDataCategory"
                 android:layout_width="match_parent"

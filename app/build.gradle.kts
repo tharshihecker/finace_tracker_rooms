@@ -53,6 +53,7 @@ dependencies {
     implementation ("androidx.lifecycle:lifecycle-viewmodel-ktx:2.8.7")
     // Add Gson dependency for JSON serialization/deserialization
     implementation(libs.gson)  // or the latest version
+    implementation ("com.github.PhilJay:MPAndroidChart:v3.1.0")
 
     testImplementation(libs.junit)
     androidTestImplementation(libs.androidx.junit)

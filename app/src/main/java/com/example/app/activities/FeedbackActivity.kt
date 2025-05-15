@@ -11,13 +11,13 @@ import android.widget.TextView
 import android.widget.Toast
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.app.NotificationCompat
-import androidx.lifecycle.lifecycleScope
 import com.example.app.R
 import com.example.app.database.AppDatabase
 import com.example.app.models.Feedback
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import androidx.lifecycle.lifecycleScope
 
 class FeedbackActivity : AppCompatActivity() {
 
@@ -25,7 +25,11 @@ class FeedbackActivity : AppCompatActivity() {
     private lateinit var tvStoredRating: TextView
     private lateinit var btnSubmit: Button
     private lateinit var db: AppDatabase
-    private var savedRating: Float = 0f // Default to 0
+    private var savedRating: Float = 0f
+
+    private val FEEDBACK_CHANNEL_ID = "feedback_rating_channel"
+    private val FEEDBACK_NOTIFICATION_ID = 2001
+    private val BUDGET_NOTIFICATION_ID = 1001 // if you want to cancel previous one
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -36,7 +40,6 @@ class FeedbackActivity : AppCompatActivity() {
         btnSubmit = findViewById(R.id.btnSubmitRating)
         db = AppDatabase.getInstance(this)
 
-        // Load existing feedback from DB
         lifecycleScope.launch {
             val feedback = withContext(Dispatchers.IO) { db.feedbackDao().getFeedback() }
             savedRating = feedback?.rating ?: 0f
@@ -44,7 +47,6 @@ class FeedbackActivity : AppCompatActivity() {
             updateRatingDisplay(savedRating)
         }
 
-        // Live update rating text as user moves stars
         ratingBar.setOnRatingBarChangeListener { _, rating, _ ->
             updateRatingDisplay(rating)
         }
@@ -88,19 +90,26 @@ class FeedbackActivity : AppCompatActivity() {
     }
 
     private fun sendRatingNotification(rating: Float) {
-        val channelId = "feedback_notifications"
-        val notificationId = 2001
         val notificationManager = getSystemService(NOTIFICATION_SERVICE) as NotificationManager
 
+        // ✅ Cancel budget notification if it's lingering
+        notificationManager.cancel(BUDGET_NOTIFICATION_ID)
+
+        // ✅ Create channel only if not already created
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val channel = NotificationChannel(
-                channelId,
-                "Feedback Notifications",
-                NotificationManager.IMPORTANCE_HIGH
-            ).apply {
-                description = "Shows submitted rating notifications"
+            val existing = notificationManager.getNotificationChannel(FEEDBACK_CHANNEL_ID)
+            if (existing == null) {
+                val channel = NotificationChannel(
+                    FEEDBACK_CHANNEL_ID,
+                    "Feedback Notifications",
+                    NotificationManager.IMPORTANCE_HIGH
+                ).apply {
+                    enableLights(true)
+                    enableVibration(true)
+                    description = "Notifications when you submit a rating"
+                }
+                notificationManager.createNotificationChannel(channel)
             }
-            notificationManager.createNotificationChannel(channel)
         }
 
         val message = when (rating.toInt()) {
@@ -112,14 +121,16 @@ class FeedbackActivity : AppCompatActivity() {
             else -> "Thanks for your feedback!"
         }
 
-        val notification = NotificationCompat.Builder(this, channelId)
+        val notification = NotificationCompat.Builder(this, FEEDBACK_CHANNEL_ID)
             .setSmallIcon(android.R.drawable.star_on)
             .setContentTitle("Feedback Submitted")
             .setStyle(NotificationCompat.BigTextStyle().bigText(message))
-            .setPriority(NotificationCompat.PRIORITY_HIGH)
+            .setPriority(NotificationCompat.PRIORITY_MAX)
+            .setDefaults(NotificationCompat.DEFAULT_ALL)
             .setAutoCancel(true)
+            .setGroup("feedback_group") // optional
             .build()
 
-        notificationManager.notify(notificationId, notification)
+        notificationManager.notify(FEEDBACK_NOTIFICATION_ID, notification)
     }
 }

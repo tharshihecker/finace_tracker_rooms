@@ -48,7 +48,6 @@ class AddTransactionActivity : AppCompatActivity() {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_add_transaction)
 
-        // UI Initialization
         tvCurrentBudget = findViewById(R.id.tvCurrentBudget)
         etTitle = findViewById(R.id.etTitle)
         etAmount = findViewById(R.id.etAmount)
@@ -63,11 +62,9 @@ class AddTransactionActivity : AppCompatActivity() {
             finish()
         }
 
-        // Spinner setup
         val adapter = ArrayAdapter(this, android.R.layout.simple_spinner_dropdown_item, categories)
         spinnerCategory.adapter = adapter
 
-        // Check if in edit mode
         isEditing = intent.getBooleanExtra("isEditing", false)
         transactionId = intent.getLongExtra("transactionId", -1L)
 
@@ -113,12 +110,14 @@ class AddTransactionActivity : AppCompatActivity() {
             val date = "${datePicker.dayOfMonth}-${datePicker.month + 1}-${datePicker.year}"
 
             lifecycleScope.launch {
+                val dao = AppDatabase.getInstance(this@AddTransactionActivity)
+
                 if (isEditing && currentTransaction != null) {
                     val updatedTransaction = currentTransaction!!.copy(
                         title = title, amount = amount, category = category, date = date
                     )
-                    AppDatabase.getInstance(this@AddTransactionActivity).transactionDao()
-                        .updateTransaction(updatedTransaction)
+                    dao.transactionDao().updateTransaction(updatedTransaction)
+
                     withContext(Dispatchers.Main) {
                         Toast.makeText(
                             this@AddTransactionActivity,
@@ -126,6 +125,7 @@ class AddTransactionActivity : AppCompatActivity() {
                             Toast.LENGTH_SHORT
                         ).show()
                     }
+
                 } else {
                     val newTransaction = Transaction(
                         id = System.currentTimeMillis(),
@@ -134,8 +134,8 @@ class AddTransactionActivity : AppCompatActivity() {
                         category = category,
                         date = date
                     )
-                    AppDatabase.getInstance(this@AddTransactionActivity).transactionDao()
-                        .insertTransaction(newTransaction)
+                    dao.transactionDao().insertTransaction(newTransaction)
+
                     withContext(Dispatchers.Main) {
                         Toast.makeText(
                             this@AddTransactionActivity,
@@ -145,8 +145,13 @@ class AddTransactionActivity : AppCompatActivity() {
                     }
                 }
 
+                // ✅ Check budget after DB update
                 checkIfBudgetExceeded()
-                finish()
+
+                // ✅ Safely finish on Main thread
+                withContext(Dispatchers.Main) {
+                    finish()
+                }
             }
         }
 
@@ -155,21 +160,23 @@ class AddTransactionActivity : AppCompatActivity() {
                 lifecycleScope.launch {
                     AppDatabase.getInstance(this@AddTransactionActivity).transactionDao()
                         .deleteTransaction(it)
+
                     withContext(Dispatchers.Main) {
                         Toast.makeText(
                             this@AddTransactionActivity,
                             getString(R.string.transaction_deleted),
                             Toast.LENGTH_SHORT
                         ).show()
+                        finish()
                     }
+
                     checkIfBudgetExceeded()
-                    finish()
                 }
             }
         }
 
         checkNotificationPermission()
-        updateBudgetStatusUIOnly() // Only update budget display, no notification
+        updateBudgetStatusUIOnly()
     }
 
     private fun checkNotificationPermission() {
@@ -183,40 +190,36 @@ class AddTransactionActivity : AppCompatActivity() {
         }
     }
 
-    // Used after Save/Delete only
-    private fun checkIfBudgetExceeded() {
-        lifecycleScope.launch {
-            val dao = AppDatabase.getInstance(this@AddTransactionActivity)
-            val transactions = dao.transactionDao().getAllTransactions()
-            val totalExpenses = transactions
-                .filter { !it.category.equals("Income", ignoreCase = true) }
-                .sumOf { it.amount }
+    private suspend fun checkIfBudgetExceeded() {
+        val dao = AppDatabase.getInstance(this@AddTransactionActivity)
+        val transactions = dao.transactionDao().getAllTransactions()
+        val totalExpenses = transactions
+            .filter { !it.category.equals("Income", ignoreCase = true) }
+            .sumOf { it.amount }
 
-            val settings = dao.settingsDao().getSettings()
-            val budget = settings?.budget ?: 0.0
-            val currency = settings?.currencySymbol ?: "$"
+        val settings = dao.settingsDao().getSettings()
+        val budget = settings?.budget ?: 0.0
+        val currency = settings?.currencySymbol ?: "$"
 
-            withContext(Dispatchers.Main) {
-                updateBudgetAndExpenses(totalExpenses, budget, currency)
-            }
+        withContext(Dispatchers.Main) {
+            updateBudgetAndExpenses(totalExpenses, budget, currency)
+        }
 
-            if (budget == 0.0) return@launch
+        if (budget == 0.0) return
 
-            if (totalExpenses > budget) {
-                val exceededAmount = totalExpenses - budget
-                val message = "Your total expenses ($currency${format(totalExpenses)}) have exceeded your budget ($currency${format(budget)})! " +
-                        "You have exceeded by $currency${format(exceededAmount)}."
-                checkAndSendNotification(message)
-            } else if (totalExpenses >= 0.9 * budget) {
-                val remaining = budget - totalExpenses
-                val message = "Warning: You are about to reach your budget limit!\n" +
-                        "Only $currency${format(remaining)} remaining from your budget of $currency${format(budget)}."
-                checkAndSendNotification(message)
-            }
+        if (totalExpenses > budget) {
+            val exceededAmount = totalExpenses - budget
+            val message = "Your total expenses ($currency${format(totalExpenses)}) have exceeded your budget ($currency${format(budget)})! " +
+                    "You have exceeded by $currency${format(exceededAmount)}."
+            checkAndSendNotification(message)
+        } else if (totalExpenses >= 0.9 * budget) {
+            val remaining = budget - totalExpenses
+            val message = "Warning: You are about to reach your budget limit!\n" +
+                    "Only $currency${format(remaining)} remaining from your budget of $currency${format(budget)}."
+            checkAndSendNotification(message)
         }
     }
 
-    // Used on activity start only
     private fun updateBudgetStatusUIOnly() {
         lifecycleScope.launch {
             val dao = AppDatabase.getInstance(this@AddTransactionActivity)
